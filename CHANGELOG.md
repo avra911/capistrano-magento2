@@ -1,5 +1,37 @@
 # Capistrano::Magento2 Change Log
 
+0.5.6
+==========
+
+* Fixed issue where setup:di:compile failing to return an exit code caused DI compilation failures to be masked
+
+0.5.5
+==========
+
+* Fixed DI artifact mismatch caused by setup:ugprade overwriting frozen config.php post compilation
+* Removed redundant (and non-functional) commands from deploy:reverted task
+* Added informational output which lists the installed modules which are disabled per `app/etc/config.php`
+
+0.5.4
+==========
+
+* Fixed issue causing failed releases when there are CSS compilation errors in setup:static-content:deploy task
+* Updated static content deployment to ignore `:magento_deploy_themes` when deploying 2.0 and issue a warning message.
+
+0.5.3
+==========
+
+* Added setting `:magento_deploy_cache_shared` for targeting cache related tasks (issue #33)
+* Added setting `:magento_deploy_setup_role` for targeting setup related tasks (issue #33)
+* Fixed magento setup, cache, index commands to only run on appropriate node(s) in multi-node deploys (issue #33).
+* Fixed capistrano-pending support to play nicely with multiple hosts. Now only performs check on a single host.
+* Updated `magento:deploy:verify` output with host specific messaging on configuration errors.
+
+0.5.2
+==========
+
+* Added ability to configure permissions set on each deploy (issue #32). See README for details.
+
 0.5.1
 ==========
 

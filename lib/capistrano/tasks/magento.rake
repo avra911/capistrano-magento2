@@ -7,12 +7,15 @@
  # http://davidalger.com/contact/
  ##
 
+include Capistrano::Magento2::Helpers
+include Capistrano::Magento2::Setup
+
 namespace :magento do
   
   namespace :cache do
     desc 'Flush Magento cache storage'
     task :flush do
-      on release_roles :all do
+      on cache_hosts do
         within release_path do
           execute :magento, 'cache:flush'
         end
@@ -21,7 +24,7 @@ namespace :magento do
     
     desc 'Clean Magento cache by types'
     task :clean do
-      on release_roles :all do
+      on cache_hosts do
         within release_path do
           execute :magento, 'cache:clean'
         end
@@ -30,7 +33,7 @@ namespace :magento do
     
     desc 'Enable Magento cache'
     task :enable do
-      on release_roles :all do
+      on cache_hosts do
         within release_path do
           execute :magento, 'cache:enable'
         end
@@ -39,7 +42,7 @@ namespace :magento do
     
     desc 'Disable Magento cache'
     task :disable do
-      on release_roles :all do
+      on cache_hosts do
         within release_path do
           execute :magento, 'cache:disable'
         end
@@ -48,7 +51,7 @@ namespace :magento do
     
     desc 'Check Magento cache enabled status'
     task :status do
-      on release_roles :all do
+      on cache_hosts do
         within release_path do
           execute :magento, 'cache:status'
         end
@@ -59,7 +62,7 @@ namespace :magento do
       # TODO: Document what the magento:cache:varnish:ban task is for and how to use it. See also magento/magento2#4106
       desc 'Add ban to Varnish for url(s)'
       task :ban do
-        on release_roles :all do
+        on primary fetch(:magento_deploy_setup_role) do
           # TODO: Document use of :ban_pools and :varnish_cache_hosts in project config file
           next unless any? :ban_pools
           next unless any? :varnish_cache_hosts
@@ -90,13 +93,9 @@ namespace :magento do
 
           execute :composer, "install #{composer_flags} 2>&1"
 
-          if fetch(:magento_deploy_production)
-            feature_version = capture :magento, "-V | cut -d' ' -f4 | cut -d. -f1-2"
-            
-            if feature_version.to_f > 2.0
-              composer_flags += ' --no-dev'
-              execute :composer, "install #{composer_flags} 2>&1" # removes require-dev components from prev command
-            end
+          if fetch(:magento_deploy_production) and magento_version > 2.0
+            composer_flags += ' --no-dev'
+            execute :composer, "install #{composer_flags} 2>&1" # removes require-dev components from prev command
           end
 
           if test "[ -d #{release_path}/update ]"   # can't count on this, but emit warning if not present
@@ -124,29 +123,77 @@ namespace :magento do
     end
 
     task :verify do
+      is_err = false
       on release_roles :all do
         unless test "[ -f #{release_path}/app/etc/config.php ]"
-          error "The repository is missing app/etc/config.php. Please install the application and retry!"
-          exit 1
+          error "\e[0;31mThe repository is missing app/etc/config.php. Please install the application and retry!\e[0m"
+          exit 1  # only need to check the repo once, so we immediately exit
         end
 
         unless test %Q[#{SSHKit.config.command_map[:php]} -r '
               $cfg = include "#{release_path}/app/etc/env.php";
               exit((int)!isset($cfg["install"]["date"]));
           ']
-          error "No environment configuration could be found. Please configure app/etc/env.php and retry!"
-          exit 1
+          error "\e[0;31mError on #{host}:\e[0m No environment configuration could be found." +
+                " Please configure app/etc/env.php and retry!"
+          is_err = true
         end
       end
+      exit 1 if is_err
     end
   end
 
   namespace :setup do
-    desc 'Run the Magento upgrade process'
+    desc 'Updates the module load sequence and upgrades database schemas and data fixtures'
     task :upgrade do
-      on release_roles :all do
+      on primary fetch(:magento_deploy_setup_role) do
         within release_path do
+          warn "\e[0;31mWarning: Use of magento:setup:upgrade on production systems is discouraged." +
+               " See https://github.com/davidalger/capistrano-magento2/issues/34 for details.\e[0m\n"
+
           execute :magento, 'setup:upgrade --keep-generated'
+        end
+      end
+    end
+    
+    namespace :db do
+      desc 'Checks if database schema and/or data require upgrading'
+      task :status do
+        on primary fetch(:magento_deploy_setup_role) do
+          within release_path do
+            execute :magento, 'setup:db:status'
+          end
+        end
+      end
+      
+      task :upgrade do
+        on primary fetch(:magento_deploy_setup_role) do
+          within release_path do
+            db_status = capture :magento, 'setup:db:status', verbosity: Logger::INFO
+            
+            if not db_status.to_s.include? 'All modules are up to date'
+              execute :magento, 'setup:db-schema:upgrade'
+              execute :magento, 'setup:db-data:upgrade'
+            end
+          end
+        end
+      end
+      
+      desc 'Upgrades data fixtures'
+      task 'schema:upgrade' do
+        on primary fetch(:magento_deploy_setup_role) do
+          within release_path do
+            execute :magento, 'setup:db-schema:upgrade'
+          end
+        end
+      end
+      
+      desc 'Upgrades database schema'
+      task 'data:upgrade' do
+        on primary fetch(:magento_deploy_setup_role) do
+          within release_path do
+            execute :magento, 'setup:db-data:upgrade'
+          end
         end
       end
     end
@@ -155,10 +202,12 @@ namespace :magento do
     task :permissions do
       on release_roles :all do
         within release_path do
-          execute :find, release_path, '-type d -exec chmod 770 {} +'
-          execute :find, release_path, '-type f -exec chmod 660 {} +'
-          execute :chmod, '-R g+s', release_path
-          execute :chmod, '+x ./bin/magento'
+          execute :find, release_path, "-type d -exec chmod #{fetch(:magento_deploy_chmod_d).to_i} {} +"
+          execute :find, release_path, "-type f -exec chmod #{fetch(:magento_deploy_chmod_f).to_i} {} +"
+          
+          fetch(:magento_deploy_chmod_x).each() do |file|
+            execute :chmod, "+x #{release_path}/#{file}"
+          end
         end
       end
       Rake::Task['magento:setup:permissions'].reenable  ## make task perpetually callable
@@ -174,12 +223,14 @@ namespace :magento do
             # present in the develop mainline, so we are testing for multi-tenant presence for long-term portability.
             if test :magento, 'setup:di:compile-multi-tenant --help >/dev/null 2>&1'
               output = capture :magento, 'setup:di:compile-multi-tenant', verbosity: Logger::INFO
-              
-              if output.to_s.include? 'Errors during compilation'
-                raise Exception, 'setup:di:compile-multi-tenant command execution failed'
-              end
             else
-              execute :magento, 'setup:di:compile'
+              output = capture :magento, 'setup:di:compile', verbosity: Logger::INFO
+            end
+            
+            # 2.0.x never returns a non-zero exit code for errors, so manually check string
+            # 2.1.x doesn't return a non-zero exit code for certain errors (see davidalger/capistrano-magento2#41)
+            if output.to_s.include? 'Errors during compilation'
+              raise Exception, 'DI compilation command execution failed'
             end
           end
         end
@@ -190,13 +241,18 @@ namespace :magento do
       desc 'Deploys static view files'
       task :deploy do
         on release_roles :all do
+          _magento_version = magento_version
+
           deploy_languages = fetch(:magento_deploy_languages).join(' ')
           deploy_themes = fetch(:magento_deploy_themes)
 
-          if deploy_themes.count() > 0
-            deploy_themes = ' -t ' + deploy_themes.join(' -t ')   # prepare value for cli command if theme(s) specified
+          if deploy_themes.count() > 0 and _magento_version >= 2.1
+            deploy_themes = deploy_themes.join(' -t ').prepend(' -t ')
+          elsif deploy_themes.count() > 0
+            warn "\e[0;31mWarning: Magento 2.0 does not support :magento_deploy_themes setting (ignoring value)\e[0m"
+            deploy_themes = nil
           else
-            deploy_themes = ''
+            deploy_themes = nil
           end
 
           # Output is being checked for a success message because this command may easily fail due to customizations
@@ -206,32 +262,20 @@ namespace :magento do
             # Workaround for 2.1 specific issue: https://github.com/magento/magento2/pull/6437
             execute "touch #{release_path}/pub/static/deployed_version.txt"
 
-            output = capture :magento,
-              "setup:static-content:deploy #{deploy_languages}#{deploy_themes} | stdbuf -o0 tr -d .",
-              verbosity: Logger::INFO
-
-            if not output.to_s.include? 'New version of deployed files'
-              raise Exception, 'Failed to compile static assets'
-            end
-
-            with(https: 'on') {
-              deploy_flags = ''
-
-              # Magento 2.0 does not have these flags, so only way to generate secure files is to do all of them :/
-              if test :magento, 'setup:static-content:deploy --help | grep -- --theme'
-                deploy_flags = " --no-javascript --no-css --no-less --no-images" \
-                  + " --no-fonts --no-html --no-misc --no-html-minify"
-              end
-
-              output = capture :magento,
-                "setup:static-content:deploy #{deploy_languages}#{deploy_themes}#{deploy_flags} | stdbuf -o0 tr -d .",
-                verbosity: Logger::INFO
-
-              if not output.to_s.include? 'New version of deployed files'
-                raise Exception, 'Failed to compile (secure) static assets'
-              end
-            }
+            # Generates all but the secure versions of RequireJS configs
+            static_content_deploy "#{deploy_languages}#{deploy_themes}"
           end
+
+          # Run again with HTTPS env var set to 'on' to pre-generate secure versions of RequireJS configs
+          deploy_flags = ['javascript', 'css', 'less', 'images', 'fonts', 'html', 'misc', 'html-minify']
+            .join(' --no-').prepend(' --no-');
+
+          # Magento 2.0 does not have these flags, so only way to generate secure files is to do all of them :/
+          deploy_flags = nil if _magento_version <= 2.0
+
+          within release_path do with(https: 'on') {
+            static_content_deploy "#{deploy_languages}#{deploy_themes}#{deploy_flags}"
+          } end
         end
       end
     end
@@ -278,7 +322,7 @@ namespace :magento do
   namespace :indexer do
     desc 'Reindex data by all indexers'
     task :reindex do
-      on release_roles :all do
+      on primary fetch(:magento_deploy_setup_role) do
         within release_path do
           execute :magento, 'indexer:reindex'
         end
@@ -287,7 +331,7 @@ namespace :magento do
 
     desc 'Shows allowed indexers'
     task :info do
-      on release_roles :all do
+      on primary fetch(:magento_deploy_setup_role) do
         within release_path do
           execute :magento, 'indexer:info'
         end
@@ -296,7 +340,7 @@ namespace :magento do
 
     desc 'Shows status of all indexers'
     task :status do
-      on release_roles :all do
+      on primary fetch(:magento_deploy_setup_role) do
         within release_path do
           execute :magento, 'indexer:status'
         end
@@ -305,7 +349,7 @@ namespace :magento do
 
     desc 'Shows mode of all indexers'
     task 'show-mode', :index do |t, args|
-      on release_roles :all do
+      on primary fetch(:magento_deploy_setup_role) do
         within release_path do
           execute :magento, 'indexer:show-mode', args[:index]
         end
@@ -314,47 +358,11 @@ namespace :magento do
 
     desc 'Sets mode of all indexers'
     task 'set-mode', :mode, :index do |t, args|
-      on release_roles :all do
+      on primary fetch(:magento_deploy_setup_role) do
         within release_path do
           execute :magento, 'indexer:set-mode', args[:mode], args[:index]
         end
       end
     end
-  end
-
-end
-
-namespace :load do
-  task :defaults do
-
-    SSHKit.config.command_map[:magento] = "/usr/bin/env php -f bin/magento --"
-
-    set :linked_files, fetch(:linked_files, []).push(
-      'app/etc/env.php',
-      'var/.setup_cronjob_status',
-      'var/.update_cronjob_status',
-      'pub/sitemap.xml'
-    )
-
-    set :linked_files_touch, fetch(:linked_files_touch, []).push(
-      'app/etc/env.php',
-      'var/.setup_cronjob_status',
-      'var/.update_cronjob_status',
-      'pub/sitemap.xml'
-    )
-
-    set :linked_dirs, fetch(:linked_dirs, []).push(
-      'pub/media', 
-      'var/backups', 
-      'var/composer_home', 
-      'var/importexport', 
-      'var/import_history', 
-      'var/log',
-      'var/session', 
-      'var/tmp'
-    )
-
-    set :magento_deploy_languages, fetch(:magento_deploy_languages, ['en_US'])
-    set :magento_deploy_themes, fetch(:magento_deploy_themes, [])
   end
 end

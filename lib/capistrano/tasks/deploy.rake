@@ -7,6 +7,8 @@
  # http://davidalger.com/contact/
  ##
 
+include Capistrano::Magento2::Helpers
+
 namespace :deploy do
   before 'deploy:check:linked_files', 'magento:deploy:check'
 
@@ -19,47 +21,43 @@ namespace :deploy do
   end
 
   task :updated do
+    invoke 'magento:deploy:verify'
+    invoke 'magento:composer:install' if fetch(:magento_deploy_composer)
+    invoke 'magento:setup:permissions'
+    if fetch(:magento_deploy_production)
+      invoke 'magento:setup:static-content:deploy'
+      invoke 'magento:setup:di:compile'
+    end
+    invoke 'magento:setup:permissions'
+    invoke 'magento:maintenance:enable' if fetch(:magento_deploy_maintenance)
+
     on release_roles :all do
-      invoke 'magento:deploy:verify'
-      invoke 'magento:composer:install' if fetch(:magento_deploy_composer)
-      invoke 'magento:setup:permissions'
-      if fetch(:magento_deploy_production)
-        invoke 'magento:setup:static-content:deploy'
-        invoke 'magento:setup:di:compile'
-      end
-      invoke 'magento:setup:permissions'
-      invoke 'magento:maintenance:enable' if fetch(:magento_deploy_maintenance)
       if test "[ -f #{current_path}/bin/magento ]"
         within current_path do
           execute :magento, 'maintenance:enable' if fetch(:magento_deploy_maintenance)
         end
       end
-      invoke 'magento:setup:upgrade'
+    end
+
+    invoke 'magento:setup:db:schema:upgrade'
+    invoke 'magento:setup:db:data:upgrade'
+
+    on primary fetch(:magento_deploy_setup_role) do
+      within release_path do
+        _disabled_modules = disabled_modules
+        if _disabled_modules.count > 0
+          info "\nThe following modules are disabled per app/etc/config.php:\n"
+          _disabled_modules.each do |module_name|
+            info '- ' + module_name
+          end
+        end
+      end
     end
   end
 
   task :published do
-    on release_roles :all do
-      invoke 'magento:cache:flush'
-      invoke 'magento:cache:varnish:ban'
-      invoke 'magento:maintenance:disable' if fetch(:magento_deploy_maintenance)
-    end
-  end
-
-  task :reverted do
-    on release_roles :all do
-      invoke 'magento:maintenance:disable' if fetch(:magento_deploy_maintenance)
-      invoke 'magento:cache:flush'
-      invoke 'magento:cache:varnish:ban'
-    end
-  end
-end
-
-namespace :load do
-  task :defaults do
-    set :magento_deploy_composer, fetch(:magento_deploy_composer, true)
-    set :magento_deploy_confirm, fetch(:magento_deploy_confirm, [])
-    set :magento_deploy_maintenance, fetch(:magento_deploy_maintenance, true)
-    set :magento_deploy_production, fetch(:magento_deploy_production, true)
+    invoke 'magento:cache:flush'
+    invoke 'magento:cache:varnish:ban'
+    invoke 'magento:maintenance:disable' if fetch(:magento_deploy_maintenance)
   end
 end
