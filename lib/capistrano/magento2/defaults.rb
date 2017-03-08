@@ -10,19 +10,18 @@
 set :linked_files, fetch(:linked_files, []).push(
   'app/etc/env.php',
   'var/.setup_cronjob_status',
-  'var/.update_cronjob_status',
-  'pub/sitemap.xml'
+  'var/.update_cronjob_status'
 )
 
 set :linked_files_touch, fetch(:linked_files_touch, []).push(
   'app/etc/env.php',
   'var/.setup_cronjob_status',
-  'var/.update_cronjob_status',
-  'pub/sitemap.xml'
+  'var/.update_cronjob_status'
 )
 
 set :linked_dirs, fetch(:linked_dirs, []).push(
-  'pub/media', 
+  'pub/media',
+  'pub/sitemaps',
   'var/backups', 
   'var/composer_home', 
   'var/importexport', 
@@ -48,3 +47,11 @@ set :magento_deploy_themes, fetch(:magento_deploy_themes, [])
 # deploy targetting defaults
 set :magento_deploy_setup_role, fetch(:magento_deploy_setup_role, :all)
 set :magento_deploy_cache_shared, fetch(:magento_deploy_cache_shared, true)
+
+# pending deploy check defaults
+set :magento_deploy_pending_role, fetch(:magento_deploy_pending_role, :all)
+set :magento_deploy_pending_warn, fetch(:magento_deploy_pending_warn, true)
+set :magento_deploy_pending_format, fetch(
+  :magento_deploy_pending_format,
+  '--pretty="format:%C(yellow)%h %Cblue%>(12)%ad %Cgreen%<(7)%aN%Cred%d %Creset%s"'
+)

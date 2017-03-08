@@ -43,6 +43,11 @@ _Note: By default, Capistrano creates "staging" and "production" stages. If you 
     
     # Load Magento deployment tasks
     require 'capistrano/magento2/deploy'
+    require 'capistrano/magento2/pending'
+    
+    # Load Git plugin
+    require "capistrano/scm/git"
+    install_plugin Capistrano::SCM::Git
     
     # Load custom tasks from `lib/capistrano/tasks` if you have any defined
     Dir.glob('lib/capistrano/tasks/*.rake').each { |r| import r }
@@ -114,7 +119,7 @@ Before you can use Capistrano to deploy, you must configure the `config/deploy.r
 | `:magento_deploy_setup_role`   | `:all`  | Role from which primary host is chosen to run things like setup:upgrade on
 | `:magento_deploy_cache_shared` | `true`  | If true, cache operations are restricted to the primary node in setup role
 | `:magento_deploy_languages`    | `['en_US']` | Array of languages passed to static content deploy routine
-| `:magento_deploy_themes`       | `[]`   | Array of themes passed to static content deploy routine (Magento 2.1+ only)
+| `:magento_deploy_themes`       | `[]`   | Array of themes passed to static content deploy (Magento 2.1.1 and later)
 | `:magento_deploy_composer`     | `true` | Enables composer install behaviour in the built-in deploy routine
 | `:magento_deploy_production`   | `true` | Enables production specific DI compilation and static content generation
 | `:magento_deploy_maintenance`  | `true` | Enables use of maintenance mode while magento:setup:upgrade runs
@@ -143,12 +148,12 @@ For the sake of simplicity in new project setups `:linked_dirs` and `:linked_fil
 set :linked_files, [
   'app/etc/env.php',
   'var/.setup_cronjob_status',
-  'var/.update_cronjob_status',
-  'pub/sitemap.xml'
+  'var/.update_cronjob_status'
 ]
 
 set :linked_dirs, [
-  'pub/media', 
+  'pub/media',
+  'pub/sitemaps',
   'var/backups', 
   'var/composer_home', 
   'var/importexport', 
@@ -159,7 +164,11 @@ set :linked_dirs, [
 ]
 ```
 
-If you would like to customize the linked files or directories for your project, you can copy either one or both of the above arrays into the `config/deploy.rb` or `config/deploy/*.rb` files and tweak them to fit your project's needs.
+If you would like to customize the linked files or directories for your project, you can copy either one or both of the above arrays into the `config/deploy.rb` or `config/deploy/*.rb` files and tweak them to fit your project's needs. Alternatively, you can add a single linked dir (or file) using `append` like this:
+
+```ruby
+append :linked_dirs, 'path/to/link'
+```
 
 ### Magento 2 Deploy Routine
 
@@ -171,7 +180,7 @@ To see what process the built-in routine runs, take a look at the included rake 
 
 ### Web Server Root Path
 
-Before deploying with Capistrano, you must update each of your web servers to point to a `current` directory inside of the `:deploy_to` directory. For example: `/var/www/html/current` Refer to the [Capistrano Structure](http://capistranorb.com/documentation/getting-started/structure/) to learn more about Capistrano's folder structure.
+Before deploying with Capistrano, you must update each of your web servers to point to the `current` directory inside of the configured `:deploy_to` directory. For example: `/var/www/html/current/pub` Refer to the [Capistrano Structure](http://capistranorb.com/documentation/getting-started/structure/) to learn more about Capistrano's folder structure.
 
 ## Magento Specific Tasks
 
@@ -200,21 +209,64 @@ All Magento 2 tasks used by the built-in `deploy.rake` file as well as some addi
 | magento:setup:static-content:deploy   | Deploys static view files                          |
 | magento:setup:upgrade                 | Run the Magento upgrade process                    |
 
+## Pending Changes Support
+
+When the line `require 'capistrano/magento2/pending'` is included in your `Capfile` per the recommended configuration above, this gem will report changes pending deployment in an abbreviated git log style format. Here is an example:
+
+```
+00:00 deploy:pending:log
+      01 git fetch origin
+    ✔ 01 dalger@localhost 1.241s
+    ✔ 01 dalger@localhost 1.259s
+      Changes pending deployment on web1 (tags/2.1.2 -> 2.1):
+      f511288 Thu Feb 23 12:19:20 2017 -0600 David Alger (HEAD -> 2.1, tag: 2.1.4, origin/2.1) Magento 2.1.4
+      7fb219c Thu Feb 23 12:17:11 2017 -0600 David Alger (tag: 2.1.3) Magento 2.1.3
+      570c9b3 Thu Feb 23 12:12:43 2017 -0600 David Alger Updated capistrano configuration
+      No changes to deploy on web2 (from and to are the same: 2.1 -> 2.1)
+```
+
+When there are no changes due for deployment to any host, a warning requiring confirmation will be emitted by default:
+
+```
+No changes to deploy on web1 (from and to are the same: 2.1 -> 2.1)
+No changes to deploy on web2 (from and to are the same: 2.1 -> 2.1)
+Are you sure you want to continue? [y/n]
+```
+
+This confirmational warning can be disabled by including the following in your project's configuration:
+
+```ruby
+set :magento_deploy_pending_warn, false
+```
+
+### Pending Changes Configuration
+
+| setting                          | what it does
+| -------------------------------- | ------- | ---
+| `:magento_deploy_pending_role`   | Role to check for pending changes on; defaults to `:all`
+| `:magento_deploy_pending_warn`   | Set this to `false` to disable confirmational warning on zero-change deployments
+| `:magento_deploy_pending_format` | Can be used to set a custom change log format; refer to `defaults.rb` for example
+
+### Pending Changes Tasks
+
+| cap command                           | what it does                                       |
+| ------------------------------------- | -------------------------------------------------- |
+| deploy:pending                        | Displays a summary of commits pending deployment   |
+
+Note: For more details including screenshots of what this functionality does, reference [this post](https://github.com/davidalger/capistrano-magento2/issues/58#issuecomment-282404477).
+
 ## Terminal Notifier on OS X
-This gem specifies [terminal-notifier](https://rubygems.org/gems/terminal-notifier) as a dependency in order to support notifications on OS X via an optional include. To use the built-in notifications, add the following line to your `Capfile`:
+
+This gem includes an optional configuration file include which adds notification support via the [terminal-notifier](https://rubygems.org/gems/terminal-notifier) gem. To configure notifications, simply add the following line to your `Capfile`:
 
 ```ruby
 require 'capistrano/magento2/notifier'
 ```
 
-## Pending Changes
-
-This gem specifies [capistrano-pending](https://rubygems.org/gems/capistrano-pending) as a dependency and adds some (optional) custom functionality on top of that gem: Any time the `deploy` command is run, a one line summary of git commits that will be deployed will be displayed. If the server(s) you are deploying to already have the latest changes, you will be warned of this and a prompt will appear confirming that you want to continue deploying.
-
-To add the `capistrano-pending` gem and additional functionality to you project, add the following line to your `Capfile`:
+**Notice:** The `terminal-notifier` gem is currently macOS specific and thus can not be used on generic *nix environments. Because this gem has been known to cause ruby stability issues on certain non-macOS environments, it is not specified as a hard requirement in this gem's gemspec. When using this functionality, it is expected the gem either be already present on your working environment or be added to your project's `Gemfile`:
 
 ```ruby
-require 'capistrano/magento2/pending'
+gem 'terminal-notifier'
 ```
 
 ## Development

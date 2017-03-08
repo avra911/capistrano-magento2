@@ -13,7 +13,7 @@ module Capistrano
   module Magento2
     module Helpers
       def magento_version
-        return (capture "/usr/bin/env php -f #{release_path}/bin/magento -- -V").split(' ').pop.to_f
+        return Gem::Version::new((capture :php, "-f #{release_path}/bin/magento -- -V").split(' ').pop)
       end
 
       def disabled_modules
@@ -29,14 +29,31 @@ module Capistrano
       def cache_hosts
         return fetch(:magento_deploy_cache_shared) ? (primary fetch :magento_deploy_setup_role) : (release_roles :all)
       end
+
+      # Set pipefail allowing console exit codes in Magento 2.1.1 and later to halt execution when using pipes
+      def Helpers.set_pipefail
+        if not SSHKit.config.command_map[:magento].include? 'set -o pipefail' # avoids trouble on multi-host deploys
+          @@pipefail_less = SSHKit.config.command_map[:magento].dup
+          SSHKit.config.command_map[:magento] = "set -o pipefail; #{@@pipefail_less}"
+        end
+      end
+
+      # Reset the command map without prefix, removing pipefail option so it won't affect other commands
+      def Helpers.unset_pipefail
+        SSHKit.config.command_map[:magento] = @@pipefail_less
+      end
     end
-    
+
     module Setup
       def static_content_deploy params
+        Helpers.set_pipefail
         output = capture :magento,
           "setup:static-content:deploy #{params} | stdbuf -o0 tr -d .",
           verbosity: Logger::INFO
+        Helpers.unset_pipefail
 
+        # String based error checking is here to catch errors in Magento 2.1.0 and earlier; later versions will exit
+        # immediately when a console exit code is retruned, never evaluating this code.
         if not output.to_s.include? 'New version of deployed files'
           raise Exception, "\e[0;31mFailed to compile static assets\e[0m"
         end
